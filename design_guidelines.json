@@ -1,0 +1,263 @@
+{
+  "project_name": "NeonVoid Chat",
+  "design_philosophy": {
+    "persona": "E1: The Anti-AI Designer",
+    "theme_name": "Bioluminescent Deep Sea",
+    "core_principles": [
+      "Fusion over Imitation: Mix Cyberpunk aesthetics with Swiss typography.",
+      "Emotion First: Every interaction should feel 'electric' and 'alive'.",
+      "Content is King: The message is the hero; UI recedes into the void.",
+      "Negative Space: Use deep black void to create focus.",
+      "Contrast: High contrast Neon against Deep Obsidian."
+    ],
+    "anti_patterns": [
+      "No generic gray backgrounds.",
+      "No default iOS/Android blue.",
+      "No center-aligned text blocks (unless headline).",
+      "No flat, lifeless buttons."
+    ]
+  },
+  "colors": {
+    "background": {
+      "primary": "#050505",
+      "secondary": "#121212",
+      "tertiary": "#1E1E1E",
+      "modal_overlay": "rgba(0, 0, 0, 0.85)"
+    },
+    "text": {
+      "primary": "#F8FAFC",
+      "secondary": "#94A3B8",
+      "tertiary": "#64748B",
+      "inverse": "#000000"
+    },
+    "accent": {
+      "primary": "#00F0FF",
+      "secondary": "#7000FF",
+      "tertiary": "#FF0055"
+    },
+    "status": {
+      "success": "#00FF94",
+      "warning": "#FFD600",
+      "error": "#FF0055",
+      "info": "#00F0FF",
+      "online": "#00FF94",
+      "offline": "#64748B"
+    },
+    "chat": {
+      "bubble_mine_bg": "#2563EB",
+      "bubble_mine_text": "#FFFFFF",
+      "bubble_theirs_bg": "#1E293B",
+      "bubble_theirs_text": "#F8FAFC",
+      "bubble_mine_border": "#60A5FA",
+      "bubble_theirs_border": "#334155"
+    },
+    "border": {
+      "subtle": "#333333",
+      "focus": "#00F0FF"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "headings": "System",
+      "body": "System",
+      "code": "System"
+    },
+    "weights": {
+      "regular": "400",
+      "medium": "500",
+      "bold": "700",
+      "black": "900"
+    },
+    "styles": {
+      "h1": {
+        "fontSize": 32,
+        "fontWeight": "800",
+        "color": "#F8FAFC",
+        "letterSpacing": 0.5,
+        "lineHeight": 40
+      },
+      "h2": {
+        "fontSize": 24,
+        "fontWeight": "700",
+        "color": "#F8FAFC",
+        "letterSpacing": 0.25,
+        "lineHeight": 32
+      },
+      "body": {
+        "fontSize": 16,
+        "fontWeight": "400",
+        "color": "#F8FAFC",
+        "lineHeight": 24
+      },
+      "caption": {
+        "fontSize": 12,
+        "fontWeight": "600",
+        "color": "#94A3B8",
+        "textTransform": "uppercase",
+        "letterSpacing": 1.0
+      },
+      "button": {
+        "fontSize": 16,
+        "fontWeight": "700",
+        "color": "#000000",
+        "textTransform": "uppercase",
+        "letterSpacing": 0.5
+      }
+    }
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "xl": 32,
+    "xxl": 48,
+    "section": 60
+  },
+  "layout": {
+    "container": {
+      "flex": 1,
+      "backgroundColor": "#050505"
+    },
+    "safe_area": {
+      "flex": 1,
+      "backgroundColor": "#050505"
+    },
+    "header": {
+      "height": 60,
+      "flexDirection": "row",
+      "alignItems": "center",
+      "justifyContent": "space-between",
+      "paddingHorizontal": 16,
+      "backgroundColor": "transparent",
+      "borderBottomWidth": 1,
+      "borderBottomColor": "rgba(255,255,255,0.1)"
+    }
+  },
+  "components": {
+    "Button": {
+      "primary": {
+        "height": 56,
+        "borderRadius": 28,
+        "backgroundColor": "#00F0FF",
+        "justifyContent": "center",
+        "alignItems": "center",
+        "shadowColor": "#00F0FF",
+        "shadowOffset": { "width": 0, "height": 4 },
+        "shadowOpacity": 0.3,
+        "shadowRadius": 8,
+        "elevation": 8
+      },
+      "secondary": {
+        "height": 56,
+        "borderRadius": 28,
+        "backgroundColor": "transparent",
+        "borderWidth": 1,
+        "borderColor": "#333",
+        "justifyContent": "center",
+        "alignItems": "center"
+      },
+      "ghost": {
+        "backgroundColor": "transparent",
+        "padding": 8
+      }
+    },
+    "Input": {
+      "container": {
+        "height": 50,
+        "borderRadius": 25,
+        "backgroundColor": "#121212",
+        "borderWidth": 1,
+        "borderColor": "#333",
+        "flexDirection": "row",
+        "alignItems": "center",
+        "paddingHorizontal": 16
+      },
+      "text": {
+        "flex": 1,
+        "color": "#F8FAFC",
+        "fontSize": 16
+      }
+    },
+    "Avatar": {
+      "container": {
+        "overflow": "hidden",
+        "backgroundColor": "#333",
+        "justifyContent": "center",
+        "alignItems": "center"
+      },
+      "small": { "width": 32, "height": 32, "borderRadius": 12 },
+      "medium": { "width": 48, "height": 48, "borderRadius": 18 },
+      "large": { "width": 80, "height": 80, "borderRadius": 30 },
+      "border_online": {
+        "borderWidth": 2,
+        "borderColor": "#00FF94"
+      }
+    },
+    "ChatBubble": {
+      "mine": {
+        "backgroundColor": "#2563EB",
+        "padding": 12,
+        "borderRadius": 20,
+        "borderBottomRightRadius": 4,
+        "maxWidth": "80%",
+        "alignSelf": "flex-end",
+        "marginBottom": 8,
+        "borderWidth": 1,
+        "borderColor": "#60A5FA"
+      },
+      "theirs": {
+        "backgroundColor": "#1E293B",
+        "padding": 12,
+        "borderRadius": 20,
+        "borderBottomLeftRadius": 4,
+        "maxWidth": "80%",
+        "alignSelf": "flex-start",
+        "marginBottom": 8,
+        "borderWidth": 1,
+        "borderColor": "#334155"
+      },
+      "image": {
+        "width": 200,
+        "height": 200,
+        "borderRadius": 12,
+        "resizeMode": "cover"
+      }
+    }
+  },
+  "assets": {
+    "images": {
+      "avatar_placeholder_1": "https://images.unsplash.com/photo-1711662171213-4141abec218f?auto=format&fit=crop&w=150&q=80",
+      "avatar_placeholder_2": "https://images.pexels.com/photos/6940458/pexels-photo-6940458.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=150&w=150",
+      "empty_state": "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=600&q=80"
+    },
+    "icons": {
+      "library": "@expo/vector-icons",
+      "set": "Ionicons",
+      "back": "arrow-back",
+      "search": "search",
+      "menu": "menu",
+      "send": "send",
+      "attach": "attach",
+      "camera": "camera",
+      "close": "close",
+      "check": "checkmark-done",
+      "user": "person-circle-outline",
+      "chat": "chatbubble-ellipses-outline",
+      "settings": "settings-outline",
+      "logout": "log-out-outline"
+    }
+  },
+  "universal_guidelines": [
+    "Always use StyleSheet.create() for styles.",
+    "Do not use inline styles unless for dynamic values.",
+    "Use SafeAreaView from react-native-safe-area-context.",
+    "Use KeyboardAvoidingView for forms.",
+    "Ensure all touchable targets are at least 44x44 points.",
+    "Use data-testid props for all interactive elements.",
+    "Wrap text in <Text> components; do not place raw text in Views.",
+    "Handle loading and error states gracefully with visual feedback.",
+    "Dark Mode is MANDATORY and fixed.",
+    "Use 'BlurView' from 'expo-blur' for sticky headers if possible, with tint='dark'."
+  ]
+}
