@@ -1,0 +1,82 @@
+# NeonVoid Chat - Product Requirements Document
+
+## Overview
+NeonVoid is a real-time 1-to-1 private messaging app built with React Native (Expo), Python FastAPI, Socket.IO, and MongoDB. It features a dark "Bioluminescent Deep Sea" theme with neon cyan accents.
+
+## Core Features
+
+### Authentication
+- **Email/Password Auth**: JWT-based signup and login
+- **Google OAuth**: Emergent-managed Google social login via `auth.emergentagent.com`
+- **Session Management**: JWT tokens stored in AsyncStorage, 7-day expiry
+
+### Chat System
+- **1-to-1 Private Chat**: Direct messaging between users
+- **Real-time Messaging**: Socket.IO WebSocket for instant delivery
+- **Text Messages**: Standard text messaging with 2000 char limit
+- **Image Sharing**: Send images (captured as base64) in conversations
+- **Typing Indicators**: Live "user is typing..." feedback
+- **Read Receipts**: Double-check marks for read messages
+- **Online Status**: Green dot indicator for online users
+
+### User Profile
+- **Username**: Editable display name
+- **Avatar Upload**: Image picker for profile pictures (base64 storage)
+- **User Search**: Find users by username or email
+
+## Tech Stack
+- **Frontend**: React Native + Expo SDK 54 + Expo Router
+- **Backend**: Python FastAPI + python-socketio
+- **Database**: MongoDB (Motor async driver)
+- **Real-time**: Socket.IO (WebSocket + polling fallback)
+- **Auth**: JWT (PyJWT) + Emergent Google OAuth
+
+## API Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/auth/signup | Register with email/password |
+| POST | /api/auth/login | Login with email/password |
+| GET | /api/auth/session | Exchange Google OAuth session_id |
+| GET | /api/auth/me | Get current user |
+| POST | /api/auth/logout | Logout |
+| GET | /api/users/search | Search users |
+| PUT | /api/users/profile | Update profile |
+| POST | /api/users/avatar | Upload avatar |
+| GET | /api/conversations | List conversations |
+| POST | /api/conversations | Create conversation |
+| GET | /api/conversations/{id}/messages | Get messages |
+| POST | /api/messages | Send message (REST) |
+| POST | /api/messages/read | Mark messages read |
+
+## Socket.IO Events
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| authenticate | Client → Server | Auth with JWT token |
+| join_conversation | Client → Server | Join chat room |
+| send_message | Client → Server | Send message |
+| typing | Client → Server | Typing indicator |
+| new_message | Server → Client | New message broadcast |
+| user_typing | Server → Client | Typing status |
+| messages_read | Server → Client | Read receipt |
+| user_online/offline | Server → Client | Presence updates |
+
+## Screen Hierarchy
+1. **/** - Auth screen (login/signup + Google)
+2. **/oauth-callback** - Google OAuth callback handler
+3. **/(app)/chats** - Conversations list (Tab 1)
+4. **/(app)/profile** - User profile (Tab 2)
+5. **/(app)/chat/[id]** - Individual chat screen
+
+## Database Collections
+- `users` - user_id, email, username, password_hash, avatar, is_online, last_seen
+- `user_sessions` - session_token, user_id, expires_at
+- `conversations` - conversation_id, participants[], last_message, updated_at
+- `messages` - message_id, conversation_id, sender_id, content, image, msg_type, read, created_at
+
+## Design System
+- **Theme**: Dark mode "Bioluminescent Deep Sea"
+- **Primary BG**: #050505 (Deep Obsidian)
+- **Accent**: #00F0FF (Neon Cyan)
+- **Chat Bubbles**: #2563EB (mine) / #1E293B (theirs)
+- **Typography**: System font, bold headings
+- **Components**: Pill buttons, floating inputs, squircle avatars
