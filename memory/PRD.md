@@ -1,7 +1,7 @@
-# NeonVoid Chat - Product Requirements Document
+# Gossipy Chat - Product Requirements Document
 
 ## Overview
-NeonVoid is a real-time 1-to-1 private messaging app built with React Native (Expo), Python FastAPI, Socket.IO, and MongoDB. It features a dark "Bioluminescent Deep Sea" theme with neon cyan accents.
+Gossipy is a real-time 1-to-1 private messaging app with proximity-based user discovery, built with React Native (Expo), Python FastAPI, Socket.IO, and MongoDB. It features a dark "Bioluminescent Deep Sea" theme with neon cyan accents.
 
 ## Core Features
 
@@ -24,6 +24,13 @@ NeonVoid is a real-time 1-to-1 private messaging app built with React Native (Ex
 - **Avatar Upload**: Image picker for profile pictures (base64 storage)
 - **User Search**: Find users by username or email
 
+### Geolocation & Proximity
+- **Location Tracking**: Battery-optimized via `expo-location` (Balanced accuracy, 10m distance interval, 30s time interval)
+- **Nearby Users**: Discover users within 10m, 50m, 100m, or 500m radius
+- **MongoDB 2dsphere**: GeoJSON Point storage with `$nearSphere` queries
+- **Real-time Location**: Updates via Socket.IO (throttled to max 1 per 15 seconds)
+- **Privacy**: Only distance shown to other users, raw coordinates never exposed
+
 ## Tech Stack
 - **Frontend**: React Native + Expo SDK 54 + Expo Router
 - **Backend**: Python FastAPI + python-socketio
@@ -45,6 +52,8 @@ NeonVoid is a real-time 1-to-1 private messaging app built with React Native (Ex
 | GET | /api/conversations | List conversations |
 | POST | /api/conversations | Create conversation |
 | GET | /api/conversations/{id}/messages | Get messages |
+| PUT | /api/users/location | Update user GeoJSON location |
+| GET | /api/users/nearby | Find nearby users by radius |
 | POST | /api/messages | Send message (REST) |
 | POST | /api/messages/read | Mark messages read |
 
@@ -61,11 +70,12 @@ NeonVoid is a real-time 1-to-1 private messaging app built with React Native (Ex
 | user_online/offline | Server → Client | Presence updates |
 
 ## Screen Hierarchy
-1. **/** - Auth screen (login/signup + Google)
+1. **/** - Auth screen (login/signup + Google) - "Gossipy" branding
 2. **/oauth-callback** - Google OAuth callback handler
 3. **/(app)/chats** - Conversations list (Tab 1)
-4. **/(app)/profile** - User profile (Tab 2)
-5. **/(app)/chat/[id]** - Individual chat screen
+4. **/(app)/nearby** - Nearby users with radius selector (Tab 2)
+5. **/(app)/profile** - User profile (Tab 3)
+6. **/(app)/chat/[id]** - Individual chat screen
 
 ## Database Collections
 - `users` - user_id, email, username, password_hash, avatar, is_online, last_seen
