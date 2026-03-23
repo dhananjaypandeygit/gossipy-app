@@ -73,6 +73,18 @@ export default function AppLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="proximity-chat"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="chat"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

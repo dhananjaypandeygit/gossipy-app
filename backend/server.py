@@ -85,6 +85,17 @@ class NearbyQuery(BaseModel):
     longitude: float
     radius: int = 500  # meters: 10, 50, 100, 500
 
+class ProximityJoin(BaseModel):
+    latitude: float
+    longitude: float
+    radius: int = 500
+
+class ProximityMessageCreate(BaseModel):
+    room_id: str
+    content: Optional[str] = None
+    image: Optional[str] = None
+    msg_type: str = "text"
+
 
 # ============ HELPERS ============
 
@@ -589,6 +600,263 @@ async def get_nearby_users(request: Request, latitude: float, longitude: float, 
     return {"users": result, "radius": radius, "count": len(result)}
 
 
+# ============ GEOHASH IMPLEMENTATION ============
+
+_BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz'
+
+def encode_geohash(latitude: float, longitude: float, precision: int = 7) -> str:
+    """Encode lat/lng to geohash string at given precision."""
+    lat_range = [-90.0, 90.0]
+    lon_range = [-180.0, 180.0]
+    geohash = []
+    bits = [16, 8, 4, 2, 1]
+    bit = 0
+    ch = 0
+    even = True
+    while len(geohash) < precision:
+        if even:
+            mid = (lon_range[0] + lon_range[1]) / 2
+            if longitude >= mid:
+                ch |= bits[bit]
+                lon_range[0] = mid
+            else:
+                lon_range[1] = mid
+        else:
+            mid = (lat_range[0] + lat_range[1]) / 2
+            if latitude >= mid:
+                ch |= bits[bit]
+                lat_range[0] = mid
+            else:
+                lat_range[1] = mid
+        even = not even
+        if bit < 4:
+            bit += 1
+        else:
+            geohash.append(_BASE32[ch])
+            bit = 0
+            ch = 0
+    return ''.join(geohash)
+
+# Radius → geohash precision mapping
+RADIUS_TO_PRECISION = {
+    10: 8,   # ~38m × 19m cells
+    50: 7,   # ~150m × 150m cells
+    100: 6,  # ~610m × 610m cells
+    500: 5,  # ~4.9km × 4.9km cells
+}
+
+def get_room_id(latitude: float, longitude: float, radius: int) -> str:
+    """Generate a proximity room ID based on geohash + radius."""
+    precision = RADIUS_TO_PRECISION.get(radius, 5)
+    gh = encode_geohash(latitude, longitude, precision)
+    return f"prox_{gh}_{radius}m"
+
+
+# ============ PROXIMITY CHAT ROUTES ============
+
+# Track sid -> proximity room mapping for auto-leave
+sid_to_proximity_room = {}
+
+@fastapi_app.post("/api/proximity/join")
+async def join_proximity_room(request: Request, body: ProximityJoin):
+    """Join a proximity chat room based on current location and radius."""
+    current_user = await get_current_user(request)
+    
+    valid_radii = [10, 50, 100, 500]
+    radius = body.radius if body.radius in valid_radii else 500
+    
+    room_id = get_room_id(body.latitude, body.longitude, radius)
+    geohash = encode_geohash(body.latitude, body.longitude, RADIUS_TO_PRECISION.get(radius, 5))
+    
+    # Upsert the room
+    now_iso = datetime.now(timezone.utc).isoformat()
+    room = await db.proximity_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    
+    if room:
+        # Add participant if not already in
+        if current_user["user_id"] not in room.get("participants", []):
+            await db.proximity_rooms.update_one(
+                {"room_id": room_id},
+                {
+                    "$addToSet": {"participants": current_user["user_id"]},
+                    "$set": {"updated_at": now_iso}
+                }
+            )
+    else:
+        room = {
+            "room_id": room_id,
+            "geohash": geohash,
+            "radius": radius,
+            "center_lat": body.latitude,
+            "center_lng": body.longitude,
+            "participants": [current_user["user_id"]],
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        await db.proximity_rooms.insert_one(room)
+    
+    # Also update the user's location
+    location_doc = {
+        "type": "Point",
+        "coordinates": [body.longitude, body.latitude]
+    }
+    await db.users.update_one(
+        {"user_id": current_user["user_id"]},
+        {"$set": {
+            "location": location_doc,
+            "location_updated_at": now_iso,
+            "current_proximity_room": room_id,
+        }}
+    )
+    
+    # Get updated room with participant info
+    updated_room = await db.proximity_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    participant_count = len(updated_room.get("participants", []))
+    
+    # Notify room about new member via socket
+    user_info = {"user_id": current_user["user_id"], "username": current_user.get("username")}
+    await sio.emit('proximity_user_joined', {
+        "room_id": room_id,
+        "user": user_info,
+        "participant_count": participant_count,
+    }, room=room_id)
+    
+    return {
+        "room_id": room_id,
+        "geohash": geohash,
+        "radius": radius,
+        "participant_count": participant_count,
+    }
+
+@fastapi_app.post("/api/proximity/leave")
+async def leave_proximity_room(request: Request):
+    """Leave current proximity chat room."""
+    current_user = await get_current_user(request)
+    body = await request.json()
+    room_id = body.get("room_id")
+    
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id required")
+    
+    # Remove from participants
+    await db.proximity_rooms.update_one(
+        {"room_id": room_id},
+        {"$pull": {"participants": current_user["user_id"]}}
+    )
+    
+    # Clear user's current room
+    await db.users.update_one(
+        {"user_id": current_user["user_id"]},
+        {"$unset": {"current_proximity_room": ""}}
+    )
+    
+    # Get updated count
+    room = await db.proximity_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    participant_count = len(room.get("participants", [])) if room else 0
+    
+    # Remove room if empty
+    if participant_count == 0 and room:
+        await db.proximity_rooms.delete_one({"room_id": room_id})
+    
+    # Notify room
+    await sio.emit('proximity_user_left', {
+        "room_id": room_id,
+        "user_id": current_user["user_id"],
+        "username": current_user.get("username"),
+        "participant_count": participant_count,
+    }, room=room_id)
+    
+    return {"success": True, "participant_count": participant_count}
+
+@fastapi_app.get("/api/proximity/room/{room_id}")
+async def get_proximity_room(request: Request, room_id: str):
+    """Get proximity room info with participant details."""
+    current_user = await get_current_user(request)
+    room = await db.proximity_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    
+    # Get participant info
+    participants = []
+    for pid in room.get("participants", []):
+        u = await db.users.find_one({"user_id": pid}, {"_id": 0, "password_hash": 0, "location": 0})
+        if u:
+            u['is_online'] = pid in online_users
+            participants.append(u)
+    
+    return {
+        "room": {
+            "room_id": room["room_id"],
+            "geohash": room.get("geohash"),
+            "radius": room.get("radius"),
+            "participant_count": len(participants),
+            "created_at": room.get("created_at"),
+        },
+        "participants": participants,
+    }
+
+@fastapi_app.get("/api/proximity/messages/{room_id}")
+async def get_proximity_messages(request: Request, room_id: str, skip: int = 0, limit: int = 50):
+    """Get messages for a proximity room (only non-expired)."""
+    current_user = await get_current_user(request)
+    
+    # Only show messages from last 24 hours
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    
+    messages = await db.proximity_messages.find(
+        {"room_id": room_id, "created_at": {"$gte": cutoff}},
+        {"_id": 0}
+    ).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    messages.reverse()
+    
+    return {"messages": messages}
+
+@fastapi_app.post("/api/proximity/messages")
+async def send_proximity_message(request: Request, body: ProximityMessageCreate):
+    """Send a message to a proximity room (REST fallback)."""
+    current_user = await get_current_user(request)
+    
+    # Verify room exists
+    room = await db.proximity_rooms.find_one({"room_id": body.room_id}, {"_id": 0})
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    
+    # Verify user is participant
+    if current_user["user_id"] not in room.get("participants", []):
+        raise HTTPException(status_code=403, detail="Not a room participant")
+    
+    msg_id = generate_id("pmsg_")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    
+    message = {
+        "message_id": msg_id,
+        "room_id": body.room_id,
+        "sender_id": current_user["user_id"],
+        "sender_username": current_user.get("username", ""),
+        "sender_avatar": current_user.get("avatar"),
+        "content": body.content,
+        "image": body.image,
+        "msg_type": body.msg_type,
+        "created_at": now_iso,
+        "expires_at": expires_at,
+    }
+    await db.proximity_messages.insert_one(message)
+    
+    msg_copy = {k: v for k, v in message.items() if k != '_id'}
+    
+    # Update room activity
+    await db.proximity_rooms.update_one(
+        {"room_id": body.room_id},
+        {"$set": {"updated_at": now_iso, "last_message": body.content or "Image"}}
+    )
+    
+    # Broadcast via socket
+    await sio.emit('proximity_message', msg_copy, room=body.room_id)
+    
+    return {"message": msg_copy}
+
+
 # ============ SOCKET.IO EVENTS ============
 
 @sio.event
@@ -718,8 +986,155 @@ async def update_location(sid, data):
     )
 
 @sio.event
+async def join_proximity(sid, data):
+    """Join a proximity chat room via WebSocket."""
+    user_id = sid_to_user.get(sid)
+    if not user_id:
+        return
+    room_id = data.get('room_id')
+    if not room_id:
+        return
+
+    # Leave previous proximity room if any
+    old_room = sid_to_proximity_room.get(sid)
+    if old_room and old_room != room_id:
+        await sio.leave_room(sid, old_room)
+        # Remove from old room participants
+        await db.proximity_rooms.update_one(
+            {"room_id": old_room},
+            {"$pull": {"participants": user_id}}
+        )
+        old_room_doc = await db.proximity_rooms.find_one({"room_id": old_room}, {"_id": 0})
+        old_count = len(old_room_doc.get("participants", [])) if old_room_doc else 0
+        if old_count == 0 and old_room_doc:
+            await db.proximity_rooms.delete_one({"room_id": old_room})
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+        await sio.emit('proximity_user_left', {
+            "room_id": old_room,
+            "user_id": user_id,
+            "username": user.get("username", "") if user else "",
+            "participant_count": old_count,
+        }, room=old_room)
+
+    await sio.enter_room(sid, room_id)
+    sid_to_proximity_room[sid] = room_id
+
+    # Add to room participants
+    await db.proximity_rooms.update_one(
+        {"room_id": room_id},
+        {"$addToSet": {"participants": user_id}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    room = await db.proximity_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    count = len(room.get("participants", [])) if room else 1
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+
+    await sio.emit('proximity_user_joined', {
+        "room_id": room_id,
+        "user": {"user_id": user_id, "username": user.get("username", "") if user else ""},
+        "participant_count": count,
+    }, room=room_id)
+    logger.info(f"Socket {sid} joined proximity room {room_id}")
+
+@sio.event
+async def leave_proximity(sid, data):
+    """Leave a proximity chat room via WebSocket."""
+    user_id = sid_to_user.get(sid)
+    if not user_id:
+        return
+    room_id = data.get('room_id') or sid_to_proximity_room.get(sid)
+    if not room_id:
+        return
+
+    await sio.leave_room(sid, room_id)
+    sid_to_proximity_room.pop(sid, None)
+
+    await db.proximity_rooms.update_one(
+        {"room_id": room_id},
+        {"$pull": {"participants": user_id}}
+    )
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$unset": {"current_proximity_room": ""}}
+    )
+    room = await db.proximity_rooms.find_one({"room_id": room_id}, {"_id": 0})
+    count = len(room.get("participants", [])) if room else 0
+    if count == 0 and room:
+        await db.proximity_rooms.delete_one({"room_id": room_id})
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    await sio.emit('proximity_user_left', {
+        "room_id": room_id,
+        "user_id": user_id,
+        "username": user.get("username", "") if user else "",
+        "participant_count": count,
+    }, room=room_id)
+
+@sio.event
+async def send_proximity_message(sid, data):
+    """Send message to proximity room via socket."""
+    user_id = sid_to_user.get(sid)
+    if not user_id:
+        return
+    room_id = data.get('room_id')
+    content = data.get('content')
+    image = data.get('image')
+    msg_type = data.get('msg_type', 'text')
+
+    if not room_id:
+        return
+
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    msg_id = generate_id("pmsg_")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+
+    message = {
+        "message_id": msg_id,
+        "room_id": room_id,
+        "sender_id": user_id,
+        "sender_username": user.get("username", "") if user else "",
+        "sender_avatar": user.get("avatar") if user else None,
+        "content": content,
+        "image": image,
+        "msg_type": msg_type,
+        "created_at": now_iso,
+        "expires_at": expires_at,
+    }
+    await db.proximity_messages.insert_one(message)
+
+    await db.proximity_rooms.update_one(
+        {"room_id": room_id},
+        {"$set": {"updated_at": now_iso, "last_message": content or "Image"}}
+    )
+
+    msg_copy = {k: v for k, v in message.items() if k != '_id'}
+    await sio.emit('proximity_message', msg_copy, room=room_id)
+
+@sio.event
 async def disconnect(sid):
     user_id = sid_to_user.pop(sid, None)
+
+    # Auto-leave proximity room on disconnect
+    prox_room = sid_to_proximity_room.pop(sid, None)
+    if prox_room and user_id:
+        await db.proximity_rooms.update_one(
+            {"room_id": prox_room},
+            {"$pull": {"participants": user_id}}
+        )
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$unset": {"current_proximity_room": ""}}
+        )
+        room = await db.proximity_rooms.find_one({"room_id": prox_room}, {"_id": 0})
+        count = len(room.get("participants", [])) if room else 0
+        if count == 0 and room:
+            await db.proximity_rooms.delete_one({"room_id": prox_room})
+        await sio.emit('proximity_user_left', {
+            "room_id": prox_room,
+            "user_id": user_id,
+            "username": "",
+            "participant_count": count,
+        }, room=prox_room)
+
     if user_id and user_id in online_users:
         online_users[user_id].discard(sid)
         if not online_users[user_id]:
@@ -745,7 +1160,14 @@ async def startup():
     await db.conversations.create_index("participants")
     await db.messages.create_index("conversation_id")
     await db.messages.create_index("message_id", unique=True)
-    logger.info("Database indexes created (including 2dsphere)")
+    # Proximity chat indexes
+    await db.proximity_rooms.create_index("room_id", unique=True)
+    await db.proximity_rooms.create_index("geohash")
+    await db.proximity_messages.create_index("room_id")
+    await db.proximity_messages.create_index("message_id", unique=True)
+    # TTL index: auto-delete messages after 24 hours
+    await db.proximity_messages.create_index("expires_at", expireAfterSeconds=0)
+    logger.info("Database indexes created (including 2dsphere + proximity TTL)")
 
 @fastapi_app.on_event("shutdown")
 async def shutdown():

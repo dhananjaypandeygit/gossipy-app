@@ -38,6 +38,7 @@ export default function NearbyScreen() {
   const [locationPermission, setLocationPermission] = useState<boolean | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [joiningRoom, setJoiningRoom] = useState(false);
   const locationWatcherRef = useRef<Location.LocationSubscription | null>(null);
   const lastUpdateRef = useRef<number>(0);
 
@@ -166,6 +167,36 @@ export default function NearbyScreen() {
     setRefreshing(true);
     updateServerLocation(currentLocation);
     fetchNearbyUsers(currentLocation);
+  };
+
+  const joinAreaChat = async () => {
+    if (!currentLocation || joiningRoom) return;
+    setJoiningRoom(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/proximity/join`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          radius: selectedRadius,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        router.push({
+          pathname: '/(app)/proximity-chat',
+          params: { roomId: data.room_id, radius: String(data.radius) },
+        });
+      }
+    } catch (e) {
+      console.error('Join area chat error:', e);
+    } finally {
+      setJoiningRoom(false);
+    }
   };
 
   const startConversation = async (participantId: string) => {
@@ -359,6 +390,26 @@ export default function NearbyScreen() {
             </Text>
           }
         />
+      )}
+
+      {/* Floating Join Area Chat Button */}
+      {currentLocation && (
+        <TouchableOpacity
+          testID="join-area-chat-btn"
+          style={styles.floatingBtn}
+          onPress={joinAreaChat}
+          disabled={joiningRoom}
+          activeOpacity={0.8}
+        >
+          {joiningRoom ? (
+            <ActivityIndicator size="small" color={COLORS.text.inverse} />
+          ) : (
+            <>
+              <Ionicons name="radio" size={20} color={COLORS.text.inverse} />
+              <Text style={styles.floatingBtnText}>Join Area Chat</Text>
+            </>
+          )}
+        </TouchableOpacity>
       )}
     </SafeAreaView>
   );
@@ -601,5 +652,26 @@ const styles = StyleSheet.create({
     color: COLORS.text.inverse,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  floatingBtn: {
+    position: 'absolute',
+    bottom: 24,
+    left: 20,
+    right: 20,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: COLORS.accent.secondary,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    elevation: 8,
+  },
+  floatingBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.text.primary,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
 });
