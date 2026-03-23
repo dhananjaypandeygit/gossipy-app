@@ -107,8 +107,8 @@ export default function AuthScreen() {
             <View style={styles.logoContainer}>
               <Ionicons name="chatbubble-ellipses" size={48} color={COLORS.accent.primary} />
             </View>
-            <Text style={styles.appTitle}>NeonVoid</Text>
-            <Text style={styles.appSubtitle}>ENCRYPTED MESSAGING</Text>
+            <Text style={styles.appTitle}>Gossipy</Text>
+            <Text style={styles.appSubtitle}>CHAT NEARBY</Text>
           </View>
 
           {/* Form */}

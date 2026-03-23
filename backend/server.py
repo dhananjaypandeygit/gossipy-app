@@ -76,6 +76,15 @@ class MessageCreate(BaseModel):
     image: Optional[str] = None
     msg_type: str = "text"
 
+class LocationUpdate(BaseModel):
+    latitude: float
+    longitude: float
+
+class NearbyQuery(BaseModel):
+    latitude: float
+    longitude: float
+    radius: int = 500  # meters: 10, 50, 100, 500
+
 
 # ============ HELPERS ============
 
@@ -494,7 +503,90 @@ async def mark_messages_read(request: Request):
 
 @fastapi_app.get("/api")
 async def root():
-    return {"message": "NeonVoid Chat API", "status": "online"}
+    return {"message": "Gossipy Chat API", "status": "online"}
+
+
+# ============ LOCATION / NEARBY ROUTES ============
+
+import math
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance in meters between two lat/lon points."""
+    R = 6371000  # Earth radius in meters
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+@fastapi_app.put("/api/users/location")
+async def update_location(request: Request, body: LocationUpdate):
+    """Update user's current location. Stored as GeoJSON for geospatial queries."""
+    current_user = await get_current_user(request)
+    location_doc = {
+        "type": "Point",
+        "coordinates": [body.longitude, body.latitude]  # GeoJSON: [lng, lat]
+    }
+    await db.users.update_one(
+        {"user_id": current_user["user_id"]},
+        {"$set": {
+            "location": location_doc,
+            "location_updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    return {"success": True, "location": {"latitude": body.latitude, "longitude": body.longitude}}
+
+@fastapi_app.get("/api/users/nearby")
+async def get_nearby_users(request: Request, latitude: float, longitude: float, radius: int = 500):
+    """Find nearby users within given radius (meters). Uses MongoDB 2dsphere index."""
+    current_user = await get_current_user(request)
+
+    # Validate radius
+    valid_radii = [10, 50, 100, 500]
+    if radius not in valid_radii:
+        radius = min(valid_radii, key=lambda x: abs(x - radius))
+
+    # MongoDB $nearSphere query with $maxDistance in meters
+    try:
+        users_cursor = db.users.find(
+            {
+                "user_id": {"$ne": current_user["user_id"]},
+                "location": {
+                    "$nearSphere": {
+                        "$geometry": {
+                            "type": "Point",
+                            "coordinates": [longitude, latitude]
+                        },
+                        "$maxDistance": radius
+                    }
+                }
+            },
+            {"_id": 0, "password_hash": 0}
+        ).limit(50)
+        nearby_users = await users_cursor.to_list(50)
+    except Exception as e:
+        logger.error(f"Nearby query error: {e}")
+        nearby_users = []
+
+    # Calculate distance for each user and add online status
+    result = []
+    for u in nearby_users:
+        loc = u.get("location", {})
+        coords = loc.get("coordinates", [0, 0])
+        distance = haversine_distance(latitude, longitude, coords[1], coords[0])
+        u['distance_meters'] = round(distance, 1)
+        u['is_online'] = u.get('user_id', '') in online_users
+        # Remove location for privacy (only show distance)
+        u.pop('location', None)
+        u.pop('location_updated_at', None)
+        result.append(u)
+
+    # Sort by distance
+    result.sort(key=lambda x: x.get('distance_meters', 0))
+
+    return {"users": result, "radius": radius, "count": len(result)}
 
 
 # ============ SOCKET.IO EVENTS ============
@@ -604,6 +696,28 @@ async def typing(sid, data):
         }, room=conversation_id, skip_sid=sid)
 
 @sio.event
+async def update_location(sid, data):
+    """Handle location update via socket for real-time nearby detection."""
+    user_id = sid_to_user.get(sid)
+    if not user_id:
+        return
+    latitude = data.get('latitude')
+    longitude = data.get('longitude')
+    if latitude is None or longitude is None:
+        return
+    location_doc = {
+        "type": "Point",
+        "coordinates": [longitude, latitude]
+    }
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "location": location_doc,
+            "location_updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+
+@sio.event
 async def disconnect(sid):
     user_id = sid_to_user.pop(sid, None)
     if user_id and user_id in online_users:
@@ -625,12 +739,13 @@ async def startup():
     await db.users.create_index("user_id", unique=True)
     await db.users.create_index("email", unique=True)
     await db.users.create_index("username")
+    await db.users.create_index([("location", "2dsphere")])
     await db.user_sessions.create_index("session_token", unique=True)
     await db.conversations.create_index("conversation_id", unique=True)
     await db.conversations.create_index("participants")
     await db.messages.create_index("conversation_id")
     await db.messages.create_index("message_id", unique=True)
-    logger.info("Database indexes created")
+    logger.info("Database indexes created (including 2dsphere)")
 
 @fastapi_app.on_event("shutdown")
 async def shutdown():

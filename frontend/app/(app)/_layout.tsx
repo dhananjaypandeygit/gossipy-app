@@ -56,6 +56,15 @@ export default function AppLayout() {
         }}
       />
       <Tabs.Screen
+        name="nearby"
+        options={{
+          title: 'Nearby',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="locate-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',

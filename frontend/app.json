@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Share photos in chat conversations",
-        "NSCameraUsageDescription": "Take photos for your profile"
+        "NSCameraUsageDescription": "Take photos for your profile",
+        "NSLocationWhenInUseUsageDescription": "Find people chatting near you"
       }
     },
     "android": {
@@ -21,7 +22,7 @@
         "backgroundColor": "#000"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "CAMERA"]
+      "permissions": ["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "CAMERA", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
     },
     "web": {
       "bundler": "metro",
