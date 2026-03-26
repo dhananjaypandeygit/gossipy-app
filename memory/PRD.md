@@ -31,6 +31,14 @@ Gossipy is a real-time 1-to-1 private messaging app with proximity-based user di
 - **Real-time Location**: Updates via Socket.IO (throttled to max 1 per 15 seconds)
 - **Privacy**: Only distance shown to other users, raw coordinates never exposed
 
+### Proximity Chat System
+- **GeoHash-based Rooms**: Dynamic room creation using geohash clustering (precision: 10m→8, 50m→7, 100m→6, 500m→5)
+- **Room ID Format**: `prox_{geohash}_{radius}m` — users at same location+radius auto-join same room
+- **24-Hour Message Expiry**: MongoDB TTL index auto-deletes messages after 24 hours
+- **Real-time Group Chat**: Socket.IO broadcast to all room participants
+- **Auto Join/Leave**: Users auto-leave rooms on disconnect, rooms auto-delete when empty
+- **System Notifications**: Join/leave events broadcast as system messages
+
 ## Tech Stack
 - **Frontend**: React Native + Expo SDK 54 + Expo Router
 - **Backend**: Python FastAPI + python-socketio
