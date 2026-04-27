@@ -39,6 +39,14 @@ Gossipy is a real-time 1-to-1 private messaging app with proximity-based user di
 - **Auto Join/Leave**: Users auto-leave rooms on disconnect, rooms auto-delete when empty
 - **System Notifications**: Join/leave events broadcast as system messages
 
+### Real-time User Presence
+- **Global Presence Map**: AuthContext maintains `Record<user_id, {is_online, last_seen}>` via Socket.IO events
+- **Instant Updates**: `user_online` / `user_offline` events broadcast to all connected clients (no polling)
+- **Last Seen Formatting**: "Just now", "5m ago", "2h ago", "Yesterday", "3d ago"
+- **Efficient**: No API re-fetch needed — presence state updates via WebSocket only
+- **Chat Header**: Real-time "Online" / "last seen Xm ago" / "typing..." priority stack
+- **Chats List**: Green dot + "Online" text for online users, last seen text for offline
+
 ## Tech Stack
 - **Frontend**: React Native + Expo SDK 54 + Expo Router
 - **Backend**: Python FastAPI + python-socketio
