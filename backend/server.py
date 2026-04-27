@@ -362,7 +362,10 @@ async def get_conversations(request: Request):
         other_id = [p for p in conv["participants"] if p != current_user["user_id"]]
         other_user = None
         if other_id:
-            other_user = await db.users.find_one({"user_id": other_id[0]}, {"_id": 0, "password_hash": 0})
+            other_user = await db.users.find_one(
+                {"user_id": other_id[0]},
+                {"_id": 0, "password_hash": 0, "location": 0, "location_updated_at": 0, "current_proximity_room": 0}
+            )
             if other_user:
                 other_user['is_online'] = other_user.get('user_id', '') in online_users
 
@@ -1139,11 +1142,12 @@ async def disconnect(sid):
         online_users[user_id].discard(sid)
         if not online_users[user_id]:
             del online_users[user_id]
+            last_seen_iso = datetime.now(timezone.utc).isoformat()
             await db.users.update_one({"user_id": user_id}, {"$set": {
                 "is_online": False,
-                "last_seen": datetime.now(timezone.utc).isoformat()
+                "last_seen": last_seen_iso
             }})
-            await sio.emit('user_offline', {'user_id': user_id})
+            await sio.emit('user_offline', {'user_id': user_id, 'last_seen': last_seen_iso})
     logger.info(f"Client disconnected: {sid}")
 
 

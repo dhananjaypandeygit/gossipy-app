@@ -21,12 +21,13 @@ interface Conversation {
     username: string;
     avatar?: string | null;
     is_online?: boolean;
+    last_seen?: string | null;
   } | null;
   unread_count: number;
 }
 
 export default function ChatsScreen() {
-  const { token, socket } = useAuth();
+  const { token, socket, getPresence } = useAuth();
   const router = useRouter();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,7 +130,32 @@ export default function ChatsScreen() {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
+  const formatLastSeen = (userId: string, fallbackLastSeen?: string | null) => {
+    const pres = getPresence(userId);
+    if (pres.is_online) return 'Online';
+    const lastSeen = pres.last_seen || fallbackLastSeen;
+    if (!lastSeen) return 'Offline';
+    const diff = Date.now() - new Date(lastSeen).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days === 1) return 'Yesterday';
+    return `${days}d ago`;
+  };
+
+  const isUserOnline = (userId: string, fallback?: boolean) => {
+    const pres = getPresence(userId);
+    // If we have real-time presence data, use it; otherwise fall back to API data
+    if (pres.is_online) return true;
+    if (pres.last_seen) return false; // We got an offline event
+    return fallback || false;
+  };
+
   const renderAvatar = (user: any, size: number = 48) => {
+    const online = user?.user_id ? isUserOnline(user.user_id, user?.is_online) : false;
     if (user?.avatar) {
       const source = user.avatar.startsWith('data:') || user.avatar.startsWith('http')
         ? { uri: user.avatar }
@@ -137,7 +163,7 @@ export default function ChatsScreen() {
       return (
         <View style={[styles.avatarContainer, { width: size, height: size, borderRadius: size * 0.38 }]}>
           <Image source={source} style={{ width: size, height: size, borderRadius: size * 0.38 }} />
-          {user?.is_online && <View style={styles.onlineDot} />}
+          {online && <View style={styles.onlineDot} />}
         </View>
       );
     }
@@ -145,41 +171,57 @@ export default function ChatsScreen() {
     return (
       <View style={[styles.avatarContainer, styles.avatarPlaceholder, { width: size, height: size, borderRadius: size * 0.38 }]}>
         <Text style={[styles.avatarInitials, { fontSize: size * 0.4 }]}>{initials}</Text>
-        {user?.is_online && <View style={styles.onlineDot} />}
+        {online && <View style={styles.onlineDot} />}
       </View>
     );
   };
 
-  const renderConversation = ({ item }: { item: Conversation }) => (
-    <TouchableOpacity
-      testID={`conversation-${item.conversation_id}`}
-      style={styles.conversationItem}
-      onPress={() => router.push(`/(app)/chat/${item.conversation_id}`)}
-      activeOpacity={0.7}
-    >
-      {renderAvatar(item.other_user)}
-      <View style={styles.conversationInfo}>
-        <View style={styles.conversationTop}>
-          <Text style={styles.conversationName} numberOfLines={1}>
-            {item.other_user?.username || 'Unknown'}
-          </Text>
-          <Text style={styles.conversationTime}>
-            {formatTime(item.last_message_at)}
-          </Text>
-        </View>
-        <View style={styles.conversationBottom}>
-          <Text style={styles.conversationLastMsg} numberOfLines={1}>
-            {item.last_message || 'No messages yet'}
-          </Text>
-          {item.unread_count > 0 && (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadText}>{item.unread_count}</Text>
+  const renderConversation = ({ item }: { item: Conversation }) => {
+    const otherUserId = item.other_user?.user_id || '';
+    const online = otherUserId ? isUserOnline(otherUserId, item.other_user?.is_online) : false;
+    const lastSeenText = otherUserId ? formatLastSeen(otherUserId, item.other_user?.last_seen) : '';
+
+    return (
+      <TouchableOpacity
+        testID={`conversation-${item.conversation_id}`}
+        style={styles.conversationItem}
+        onPress={() => router.push(`/(app)/chat/${item.conversation_id}`)}
+        activeOpacity={0.7}
+      >
+        {renderAvatar(item.other_user)}
+        <View style={styles.conversationInfo}>
+          <View style={styles.conversationTop}>
+            <Text style={styles.conversationName} numberOfLines={1}>
+              {item.other_user?.username || 'Unknown'}
+            </Text>
+            <Text style={styles.conversationTime}>
+              {formatTime(item.last_message_at)}
+            </Text>
+          </View>
+          <View style={styles.conversationBottom}>
+            <View style={styles.lastMsgRow}>
+              {online ? (
+                <View style={styles.presenceIndicator}>
+                  <View style={styles.presenceDotSmall} />
+                  <Text style={styles.presenceOnlineText}>Online</Text>
+                </View>
+              ) : lastSeenText ? (
+                <Text style={styles.presenceOfflineText}>{lastSeenText}</Text>
+              ) : null}
+              <Text style={styles.conversationLastMsg} numberOfLines={1}>
+                {item.last_message ? `· ${item.last_message}` : 'No messages yet'}
+              </Text>
             </View>
-          )}
+            {item.unread_count > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadText}>{item.unread_count}</Text>
+              </View>
+            )}
+          </View>
         </View>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   const renderSearchResult = ({ item }: { item: any }) => (
     <TouchableOpacity
@@ -439,11 +481,37 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
+  lastMsgRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 8,
+    gap: 4,
+  },
+  presenceIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  presenceDotSmall: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: COLORS.status.online,
+  },
+  presenceOnlineText: {
+    fontSize: 12,
+    color: COLORS.status.online,
+    fontWeight: '600',
+  },
+  presenceOfflineText: {
+    fontSize: 12,
+    color: COLORS.text.tertiary,
+  },
   conversationLastMsg: {
     fontSize: 14,
     color: COLORS.text.secondary,
     flex: 1,
-    marginRight: 8,
   },
   unreadBadge: {
     minWidth: 22,

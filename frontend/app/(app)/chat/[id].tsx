@@ -26,7 +26,7 @@ interface Message {
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { user, token, socket } = useAuth();
+  const { user, token, socket, getPresence } = useAuth();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
@@ -213,6 +213,32 @@ export default function ChatScreen() {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const getHeaderStatus = () => {
+    if (isTyping) return 'typing...';
+    if (!otherUser?.user_id) return '';
+    const pres = getPresence(otherUser.user_id);
+    if (pres.is_online) return 'Online';
+    const lastSeen = pres.last_seen || otherUser?.last_seen;
+    if (!lastSeen) return otherUser?.is_online ? 'Online' : 'Offline';
+    const diff = Date.now() - new Date(lastSeen).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'last seen just now';
+    if (mins < 60) return `last seen ${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `last seen ${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days === 1) return 'last seen yesterday';
+    return `last seen ${days}d ago`;
+  };
+
+  const isOtherOnline = () => {
+    if (!otherUser?.user_id) return false;
+    const pres = getPresence(otherUser.user_id);
+    if (pres.is_online) return true;
+    if (pres.last_seen) return false;
+    return otherUser?.is_online || false;
+  };
+
   const renderAvatar = (size: number = 36) => {
     if (otherUser?.avatar) {
       const source = otherUser.avatar.startsWith('data:') || otherUser.avatar.startsWith('http')
@@ -290,8 +316,11 @@ export default function ChatScreen() {
             <Text style={styles.headerUsername} numberOfLines={1}>
               {otherUser?.username || 'Loading...'}
             </Text>
-            <Text style={styles.headerStatus}>
-              {isTyping ? 'typing...' : otherUser?.is_online ? 'Online' : 'Offline'}
+            <Text style={[
+              styles.headerStatus,
+              { color: isOtherOnline() || isTyping ? COLORS.status.online : COLORS.text.tertiary }
+            ]}>
+              {getHeaderStatus()}
             </Text>
           </View>
         </View>

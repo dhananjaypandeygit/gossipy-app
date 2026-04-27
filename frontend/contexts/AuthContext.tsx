@@ -13,28 +13,39 @@ interface User {
   last_seen?: string;
 }
 
+interface PresenceInfo {
+  is_online: boolean;
+  last_seen: string | null;
+}
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
   socket: Socket | null;
+  presence: Record<string, PresenceInfo>;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, username: string, password: string) => Promise<void>;
   handleGoogleAuth: (sessionId: string) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (user: User) => void;
+  getPresence: (userId: string) => PresenceInfo;
 }
+
+const defaultPresence: PresenceInfo = { is_online: false, last_seen: null };
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   token: null,
   loading: true,
   socket: null,
+  presence: {},
   login: async () => {},
   signup: async () => {},
   handleGoogleAuth: async () => {},
   logout: async () => {},
   updateUser: () => {},
+  getPresence: () => defaultPresence,
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -43,7 +54,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [presence, setPresence] = useState<Record<string, PresenceInfo>>({});
   const socketRef = useRef<Socket | null>(null);
+
+  // Efficient presence updater — only touches the changed user
+  const handleUserOnline = useCallback((data: { user_id: string }) => {
+    setPresence(prev => ({
+      ...prev,
+      [data.user_id]: { is_online: true, last_seen: null },
+    }));
+  }, []);
+
+  const handleUserOffline = useCallback((data: { user_id: string; last_seen?: string }) => {
+    setPresence(prev => ({
+      ...prev,
+      [data.user_id]: { is_online: false, last_seen: data.last_seen || new Date().toISOString() },
+    }));
+  }, []);
+
+  const getPresence = useCallback((userId: string): PresenceInfo => {
+    return presence[userId] || defaultPresence;
+  }, [presence]);
 
   const connectSocket = useCallback((authToken: string) => {
     if (socketRef.current?.connected) return;
@@ -63,19 +94,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.log('Socket authenticated:', data.user_id);
     });
 
+    // Global presence listeners — fire on every screen
+    newSocket.on('user_online', handleUserOnline);
+    newSocket.on('user_offline', handleUserOffline);
+
     newSocket.on('disconnect', () => {
       console.log('Socket disconnected');
     });
 
     socketRef.current = newSocket;
-  }, []);
+  }, [handleUserOnline, handleUserOffline]);
 
   const disconnectSocket = useCallback(() => {
     if (socketRef.current) {
+      socketRef.current.off('user_online', handleUserOnline);
+      socketRef.current.off('user_offline', handleUserOffline);
       socketRef.current.disconnect();
       socketRef.current = null;
     }
-  }, []);
+  }, [handleUserOnline, handleUserOffline]);
 
   useEffect(() => {
     const loadAuth = async () => {
@@ -161,6 +198,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await AsyncStorage.removeItem('auth_token');
     setUser(null);
     setToken(null);
+    setPresence({});
   };
 
   const updateUser = (updatedUser: User) => {
@@ -169,8 +207,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider value={{
-      user, token, loading, socket: socketRef.current,
-      login, signup, handleGoogleAuth, logout, updateUser
+      user, token, loading, socket: socketRef.current, presence,
+      login, signup, handleGoogleAuth, logout, updateUser, getPresence,
     }}>
       {children}
     </AuthContext.Provider>

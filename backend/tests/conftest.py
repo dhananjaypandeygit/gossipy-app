@@ -13,22 +13,18 @@ def api_client():
 
 @pytest.fixture(scope="session")
 def test_user_credentials():
-    """Generate unique test user credentials."""
-    import time
-    timestamp = int(time.time() * 1000)
+    """Use existing test user credentials."""
     return {
-        "email": f"test_user_{timestamp}@example.com",
-        "username": f"testuser_{timestamp}",
-        "password": "TestPass123!"
+        "email": "geo_test@test.com",
+        "username": "geo_test",
+        "password": "pass1234"
     }
 
 @pytest.fixture(scope="session")
 def test_user2_credentials():
-    """Generate second test user credentials for multi-user tests."""
-    import time
-    timestamp = int(time.time() * 1000) + 1
+    """Use existing second test user credentials."""
     return {
-        "email": f"test_user2_{timestamp}@example.com",
-        "username": f"testuser2_{timestamp}",
-        "password": "TestPass456!"
+        "email": "geo_nearby@test.com",
+        "username": "geo_nearby",
+        "password": "pass1234"
     }
