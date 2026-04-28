@@ -47,6 +47,14 @@ Gossipy is a real-time 1-to-1 private messaging app with proximity-based user di
 - **Chat Header**: Real-time "Online" / "last seen Xm ago" / "typing..." priority stack
 - **Chats List**: Green dot + "Online" text for online users, last seen text for offline
 
+### Anonymous Mode (Ghost Mode)
+- **Toggle**: `PUT /api/users/anonymous` — enables/disables anonymous identity
+- **Random Names**: Fun adjective+noun+number combos (e.g., ShadowWolf20, VoidFalcon54)
+- **New Name Per Enable**: Each toggle ON generates a fresh anonymous name
+- **Privacy Protection**: When anonymous, all APIs mask real name, email (→ anonymous@gossipy.app), and avatar (→ null)
+- **Send-time Baking**: Messages store sender_username/avatar/is_anonymous at creation — identity changes don't retroactively affect old messages
+- **Frontend**: "Ghost Mode" toggle on Profile with protection checklist (real name, avatar, email all hidden)
+
 ## Tech Stack
 - **Frontend**: React Native + Expo SDK 54 + Expo Router
 - **Backend**: Python FastAPI + python-socketio
