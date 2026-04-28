@@ -22,7 +22,13 @@
         "backgroundColor": "#000"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "CAMERA", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -39,7 +45,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#000"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

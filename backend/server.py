@@ -13,6 +13,7 @@ from typing import List, Optional
 import uuid
 import bcrypt
 import jwt
+import random
 from datetime import datetime, timezone, timedelta
 import httpx
 
@@ -99,6 +100,26 @@ class ProximityMessageCreate(BaseModel):
 
 # ============ HELPERS ============
 
+# Anonymous name generator
+_ANON_ADJECTIVES = [
+    'Shadow', 'Cosmic', 'Neon', 'Phantom', 'Crystal', 'Midnight', 'Storm',
+    'Velvet', 'Silent', 'Mystic', 'Lunar', 'Arctic', 'Blazing', 'Crimson',
+    'Digital', 'Echo', 'Frost', 'Ghost', 'Haze', 'Jade', 'Nebula', 'Pixel',
+    'Quantum', 'Rogue', 'Stealth', 'Thunder', 'Void', 'Whisper', 'Zen', 'Wild',
+]
+_ANON_NOUNS = [
+    'Fox', 'Wolf', 'Hawk', 'Lynx', 'Panda', 'Tiger', 'Raven', 'Viper',
+    'Falcon', 'Bear', 'Owl', 'Shark', 'Phoenix', 'Dragon', 'Cobra',
+    'Panther', 'Eagle', 'Lion', 'Jaguar', 'Sphinx', 'Griffin', 'Kraken',
+    'Cipher', 'Specter', 'Wraith', 'Ninja', 'Nomad', 'Drifter', 'Ranger', 'Scout',
+]
+
+def generate_anonymous_name() -> str:
+    adj = random.choice(_ANON_ADJECTIVES)
+    noun = random.choice(_ANON_NOUNS)
+    num = random.randint(10, 99)
+    return f"{adj}{noun}{num}"
+
 def generate_id(prefix: str = "") -> str:
     return f"{prefix}{uuid.uuid4().hex[:12]}"
 
@@ -161,10 +182,34 @@ async def get_current_user(request: Request) -> dict:
 
 
 def serialize_user(user: dict) -> dict:
-    """Remove sensitive fields from user dict."""
+    """Remove sensitive fields from user dict. Returns FULL user info (for self)."""
     u = {k: v for k, v in user.items() if k != '_id' and k != 'password_hash'}
     u['is_online'] = u.get('user_id', '') in online_users
     return u
+
+def get_display_user(user: dict) -> dict:
+    """Get user display info respecting anonymous mode. Use for OTHER users."""
+    is_anon = user.get('is_anonymous', False)
+    u = {
+        'user_id': user.get('user_id', ''),
+        'username': user.get('anonymous_username', 'Anonymous') if is_anon else user.get('username', ''),
+        'avatar': None if is_anon else user.get('avatar'),
+        'email': 'anonymous@gossipy.app' if is_anon else user.get('email', ''),
+        'is_online': user.get('user_id', '') in online_users,
+        'is_anonymous': is_anon,
+        'last_seen': user.get('last_seen'),
+    }
+    return u
+
+def get_sender_display(user: dict) -> dict:
+    """Get sender info for messages. Bakes identity at send-time."""
+    is_anon = user.get('is_anonymous', False)
+    return {
+        'sender_id': user.get('user_id', ''),
+        'sender_username': user.get('anonymous_username', 'Anonymous') if is_anon else user.get('username', ''),
+        'sender_avatar': None if is_anon else user.get('avatar'),
+        'sender_is_anonymous': is_anon,
+    }
 
 
 # ============ AUTH ROUTES ============
@@ -186,6 +231,8 @@ async def signup(req: SignupRequest):
         "password_hash": hash_password(req.password),
         "avatar": None,
         "is_online": False,
+        "is_anonymous": False,
+        "anonymous_username": generate_anonymous_name(),
         "last_seen": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -249,6 +296,8 @@ async def exchange_session(session_id: str, response: Response):
             "password_hash": None,
             "avatar": picture,
             "is_online": False,
+            "is_anonymous": False,
+            "anonymous_username": generate_anonymous_name(),
             "last_seen": datetime.now(timezone.utc).isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -300,21 +349,23 @@ async def search_users(request: Request, q: str = ""):
     current_user = await get_current_user(request)
     if not q or len(q) < 1:
         return {"users": []}
+    # Search by real username, email, OR anonymous_username
     users = await db.users.find(
         {
             "$and": [
                 {"user_id": {"$ne": current_user["user_id"]}},
                 {"$or": [
                     {"username": {"$regex": q, "$options": "i"}},
-                    {"email": {"$regex": q, "$options": "i"}}
+                    {"email": {"$regex": q, "$options": "i"}},
+                    {"anonymous_username": {"$regex": q, "$options": "i"}},
                 ]}
             ]
         },
         {"_id": 0, "password_hash": 0}
     ).to_list(20)
-    for u in users:
-        u['is_online'] = u.get('user_id', '') in online_users
-    return {"users": users}
+    # Apply display masking for anonymous users
+    result = [get_display_user(u) for u in users]
+    return {"users": result}
 
 @fastapi_app.put("/api/users/profile")
 async def update_profile(request: Request, update: ProfileUpdate):
@@ -346,6 +397,23 @@ async def upload_avatar(request: Request):
     await db.users.update_one({"user_id": current_user["user_id"]}, {"$set": {"avatar": avatar_base64}})
     return {"avatar": avatar_base64}
 
+@fastapi_app.put("/api/users/anonymous")
+async def toggle_anonymous(request: Request):
+    """Toggle anonymous mode. Generates new anonymous username each time enabled."""
+    current_user = await get_current_user(request)
+    body = await request.json()
+    enable = body.get("is_anonymous", False)
+
+    update_doc = {"is_anonymous": enable}
+    if enable:
+        # Generate fresh anonymous name each time
+        update_doc["anonymous_username"] = generate_anonymous_name()
+
+    await db.users.update_one({"user_id": current_user["user_id"]}, {"$set": update_doc})
+    user = await db.users.find_one({"user_id": current_user["user_id"]}, {"_id": 0, "password_hash": 0})
+    user['is_online'] = user.get('user_id', '') in online_users
+    return {"user": user}
+
 
 # ============ CONVERSATION ROUTES ============
 
@@ -362,12 +430,12 @@ async def get_conversations(request: Request):
         other_id = [p for p in conv["participants"] if p != current_user["user_id"]]
         other_user = None
         if other_id:
-            other_user = await db.users.find_one(
+            raw_user = await db.users.find_one(
                 {"user_id": other_id[0]},
                 {"_id": 0, "password_hash": 0, "location": 0, "location_updated_at": 0, "current_proximity_room": 0}
             )
-            if other_user:
-                other_user['is_online'] = other_user.get('user_id', '') in online_users
+            if raw_user:
+                other_user = get_display_user(raw_user)
 
         # Count unread messages
         unread = await db.messages.count_documents({
@@ -456,10 +524,14 @@ async def send_message_rest(request: Request, body: MessageCreate):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     msg_id = generate_id("msg_")
+    sender_info = get_sender_display(current_user)
     message = {
         "message_id": msg_id,
         "conversation_id": body.conversation_id,
         "sender_id": current_user["user_id"],
+        "sender_username": sender_info["sender_username"],
+        "sender_avatar": sender_info["sender_avatar"],
+        "sender_is_anonymous": sender_info["sender_is_anonymous"],
         "content": body.content,
         "image": body.image,
         "msg_type": body.msg_type,
@@ -584,18 +656,15 @@ async def get_nearby_users(request: Request, latitude: float, longitude: float, 
         logger.error(f"Nearby query error: {e}")
         nearby_users = []
 
-    # Calculate distance for each user and add online status
+    # Calculate distance for each user and apply display masking
     result = []
     for u in nearby_users:
         loc = u.get("location", {})
         coords = loc.get("coordinates", [0, 0])
         distance = haversine_distance(latitude, longitude, coords[1], coords[0])
-        u['distance_meters'] = round(distance, 1)
-        u['is_online'] = u.get('user_id', '') in online_users
-        # Remove location for privacy (only show distance)
-        u.pop('location', None)
-        u.pop('location_updated_at', None)
-        result.append(u)
+        display_u = get_display_user(u)
+        display_u['distance_meters'] = round(distance, 1)
+        result.append(display_u)
 
     # Sort by distance
     result.sort(key=lambda x: x.get('distance_meters', 0))
@@ -784,8 +853,7 @@ async def get_proximity_room(request: Request, room_id: str):
     for pid in room.get("participants", []):
         u = await db.users.find_one({"user_id": pid}, {"_id": 0, "password_hash": 0, "location": 0})
         if u:
-            u['is_online'] = pid in online_users
-            participants.append(u)
+            participants.append(get_display_user(u))
     
     return {
         "room": {
@@ -832,12 +900,16 @@ async def send_proximity_message(request: Request, body: ProximityMessageCreate)
     now_iso = datetime.now(timezone.utc).isoformat()
     expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     
+    full_user = await db.users.find_one({"user_id": current_user["user_id"]}, {"_id": 0, "password_hash": 0})
+    sender_info = get_sender_display(full_user) if full_user else get_sender_display(current_user)
+    
     message = {
         "message_id": msg_id,
         "room_id": body.room_id,
         "sender_id": current_user["user_id"],
-        "sender_username": current_user.get("username", ""),
-        "sender_avatar": current_user.get("avatar"),
+        "sender_username": sender_info["sender_username"],
+        "sender_avatar": sender_info["sender_avatar"],
+        "sender_is_anonymous": sender_info["sender_is_anonymous"],
         "content": body.content,
         "image": body.image,
         "msg_type": body.msg_type,
@@ -925,11 +997,17 @@ async def send_message(sid, data):
     if not conversation_id:
         return
 
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    sender_info = get_sender_display(user) if user else {"sender_id": user_id, "sender_username": "", "sender_avatar": None, "sender_is_anonymous": False}
+
     msg_id = generate_id("msg_")
     message = {
         "message_id": msg_id,
         "conversation_id": conversation_id,
         "sender_id": user_id,
+        "sender_username": sender_info["sender_username"],
+        "sender_avatar": sender_info["sender_avatar"],
+        "sender_is_anonymous": sender_info["sender_is_anonymous"],
         "content": content,
         "image": image,
         "msg_type": msg_type,
@@ -1086,6 +1164,7 @@ async def send_proximity_message(sid, data):
         return
 
     user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    sender_info = get_sender_display(user) if user else {"sender_id": user_id, "sender_username": "", "sender_avatar": None, "sender_is_anonymous": False}
     msg_id = generate_id("pmsg_")
     now_iso = datetime.now(timezone.utc).isoformat()
     expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
@@ -1094,8 +1173,9 @@ async def send_proximity_message(sid, data):
         "message_id": msg_id,
         "room_id": room_id,
         "sender_id": user_id,
-        "sender_username": user.get("username", "") if user else "",
-        "sender_avatar": user.get("avatar") if user else None,
+        "sender_username": sender_info["sender_username"],
+        "sender_avatar": sender_info["sender_avatar"],
+        "sender_is_anonymous": sender_info["sender_is_anonymous"],
         "content": content,
         "image": image,
         "msg_type": msg_type,

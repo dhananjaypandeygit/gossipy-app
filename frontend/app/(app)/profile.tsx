@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Image,
-  TextInput, ActivityIndicator, Alert, ScrollView,
+  TextInput, ActivityIndicator, Alert, ScrollView, Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +19,34 @@ export default function ProfileScreen() {
   const [newUsername, setNewUsername] = useState(user?.username || '');
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [togglingAnon, setTogglingAnon] = useState(false);
+
+  const isAnonymous = (user as any)?.is_anonymous || false;
+  const anonymousUsername = (user as any)?.anonymous_username || '';
+
+  const handleToggleAnonymous = async (value: boolean) => {
+    setTogglingAnon(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/users/anonymous`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ is_anonymous: value }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        updateUser(data.user);
+      } else {
+        Alert.alert('Error', 'Failed to toggle anonymous mode');
+      }
+    } catch (e) {
+      Alert.alert('Error', 'Failed to toggle anonymous mode');
+    } finally {
+      setTogglingAnon(false);
+    }
+  };
 
   const handleSaveProfile = async () => {
     if (!newUsername.trim()) {
@@ -214,6 +242,62 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+        {/* Anonymous Mode Section */}
+        <View style={styles.anonSection}>
+          <View style={styles.anonHeader}>
+            <View style={styles.anonIconContainer}>
+              <Ionicons name="eye-off" size={22} color={isAnonymous ? COLORS.accent.secondary : COLORS.text.tertiary} />
+            </View>
+            <View style={styles.anonTextContainer}>
+              <Text style={styles.anonTitle}>Ghost Mode</Text>
+              <Text style={styles.anonDescription}>
+                {isAnonymous
+                  ? `You appear as "${anonymousUsername}"`
+                  : 'Hide your identity from others'}
+              </Text>
+            </View>
+            <Switch
+              testID="anonymous-toggle"
+              value={isAnonymous}
+              onValueChange={handleToggleAnonymous}
+              disabled={togglingAnon}
+              trackColor={{ false: COLORS.bg.tertiary, true: COLORS.accent.secondary }}
+              thumbColor={isAnonymous ? COLORS.text.primary : COLORS.text.tertiary}
+            />
+          </View>
+          {isAnonymous && (
+            <View style={styles.anonActiveCard}>
+              <View style={styles.anonActiveBadge}>
+                <Ionicons name="shield-checkmark" size={16} color={COLORS.accent.secondary} />
+                <Text style={styles.anonActiveText}>GHOST MODE ACTIVE</Text>
+              </View>
+              <View style={styles.anonIdentityRow}>
+                <View style={styles.anonAvatarPlaceholder}>
+                  <Ionicons name="skull-outline" size={24} color={COLORS.accent.secondary} />
+                </View>
+                <View style={styles.anonIdentityInfo}>
+                  <Text style={styles.anonIdentityName}>{anonymousUsername}</Text>
+                  <Text style={styles.anonIdentityHint}>Others see this identity</Text>
+                </View>
+              </View>
+              <View style={styles.anonProtections}>
+                <View style={styles.anonProtectionItem}>
+                  <Ionicons name="checkmark-circle" size={14} color={COLORS.status.success} />
+                  <Text style={styles.anonProtectionText}>Real name hidden</Text>
+                </View>
+                <View style={styles.anonProtectionItem}>
+                  <Ionicons name="checkmark-circle" size={14} color={COLORS.status.success} />
+                  <Text style={styles.anonProtectionText}>Avatar hidden</Text>
+                </View>
+                <View style={styles.anonProtectionItem}>
+                  <Ionicons name="checkmark-circle" size={14} color={COLORS.status.success} />
+                  <Text style={styles.anonProtectionText}>Email hidden</Text>
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+
         {/* Logout */}
         <TouchableOpacity
           testID="logout-btn"
@@ -388,5 +472,101 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: COLORS.status.error,
+  },
+  anonSection: {
+    width: '100%',
+    paddingHorizontal: 20,
+    marginTop: 24,
+  },
+  anonHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.bg.secondary,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 16,
+    gap: 12,
+  },
+  anonIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: COLORS.bg.tertiary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  anonTextContainer: {
+    flex: 1,
+  },
+  anonTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.text.primary,
+  },
+  anonDescription: {
+    fontSize: 12,
+    color: COLORS.text.secondary,
+    marginTop: 2,
+  },
+  anonActiveCard: {
+    marginTop: 10,
+    backgroundColor: 'rgba(112, 0, 255, 0.08)',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(112, 0, 255, 0.2)',
+  },
+  anonActiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 12,
+  },
+  anonActiveText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.accent.secondary,
+    letterSpacing: 1.5,
+  },
+  anonIdentityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  anonAvatarPlaceholder: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: 'rgba(112, 0, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(112, 0, 255, 0.3)',
+  },
+  anonIdentityInfo: {
+    flex: 1,
+  },
+  anonIdentityName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: COLORS.text.primary,
+  },
+  anonIdentityHint: {
+    fontSize: 12,
+    color: COLORS.text.tertiary,
+    marginTop: 2,
+  },
+  anonProtections: {
+    gap: 6,
+  },
+  anonProtectionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  anonProtectionText: {
+    fontSize: 13,
+    color: COLORS.text.secondary,
   },
 });
