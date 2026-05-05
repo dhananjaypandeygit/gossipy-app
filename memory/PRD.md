@@ -55,6 +55,16 @@ Gossipy is a real-time 1-to-1 private messaging app with proximity-based user di
 - **Send-time Baking**: Messages store sender_username/avatar/is_anonymous at creation — identity changes don't retroactively affect old messages
 - **Frontend**: "Ghost Mode" toggle on Profile with protection checklist (real name, avatar, email all hidden)
 
+### Ephemeral Media Messaging
+- **View-Once / View-Twice**: Media (images, videos, audio) viewable 1 or 2 times, then permanently inaccessible
+- **Signed Access Tokens**: JWT-based, 60-second expiry, single-use per view attempt
+- **Per-User View Tracking**: `views` dict in MongoDB tracks each viewer's count
+- **Auto-Expiry**: Media marked `expired=true` after recipient exhausts view limit
+- **Self-Hosted Storage**: Base64 in MongoDB (no external S3 dependency)
+- **Supported Types**: image/jpeg, image/png, image/gif, image/webp, video/mp4, video/webm, audio/mpeg, audio/mp4, audio/ogg, audio/wav
+- **Security**: Token validates media_id + user_id + expiry; wrong media_id rejected; expired tokens rejected; no direct content access without valid token
+- **Frontend**: Media options menu (Photo, View Once 🔥, View Twice 👁️), ephemeral bubble UI, fullscreen media viewer, expiry placeholder
+
 ## Tech Stack
 - **Frontend**: React Native + Expo SDK 54 + Expo Router
 - **Backend**: Python FastAPI + python-socketio
