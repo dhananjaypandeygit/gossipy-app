@@ -19,6 +19,9 @@ interface Message {
   sender_id: string;
   content: string | null;
   image: string | null;
+  media_id?: string;
+  media_category?: string;
+  media_view_limit?: number;
   msg_type: string;
   read: boolean;
   created_at: string;
@@ -33,6 +36,9 @@ export default function ChatScreen() {
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [otherUser, setOtherUser] = useState<any>(null);
+  const [viewingMedia, setViewingMedia] = useState<string | null>(null);
+  const [mediaContent, setMediaContent] = useState<{ content: string; mime_type: string; is_final: boolean } | null>(null);
+  const [mediaStatuses, setMediaStatuses] = useState<Record<string, { viewable: boolean; views_remaining: number }>>({});
   const [isTyping, setIsTyping] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -208,6 +214,93 @@ export default function ChatScreen() {
     }
   };
 
+  const handleSendEphemeralMedia = async (viewLimit: number = 1) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      quality: 0.5,
+      base64: true,
+    });
+
+    if (!result.canceled && result.assets[0]?.base64) {
+      setSending(true);
+      const asset = result.assets[0];
+      const mimeType = asset.type === 'video' ? 'video/mp4' : 'image/jpeg';
+      const base64Data = `data:${mimeType};base64,${asset.base64}`;
+
+      try {
+        await fetch(`${BACKEND_URL}/api/media/upload`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            content: base64Data,
+            mime_type: mimeType,
+            view_limit: viewLimit,
+            conversation_id: id,
+          }),
+        });
+      } catch (e) {
+        console.error('Send ephemeral media error:', e);
+      } finally {
+        setSending(false);
+      }
+    }
+  };
+
+  const handleViewMedia = async (mediaId: string) => {
+    setViewingMedia(mediaId);
+    try {
+      // Request access token
+      const tokenRes = await fetch(`${BACKEND_URL}/api/media/${mediaId}/token`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!tokenRes.ok) {
+        const err = await tokenRes.json();
+        setMediaStatuses(prev => ({ ...prev, [mediaId]: { viewable: false, views_remaining: 0 } }));
+        setViewingMedia(null);
+        return;
+      }
+      const tokenData = await tokenRes.json();
+
+      // View the media
+      const viewRes = await fetch(`${BACKEND_URL}/api/media/${mediaId}/view?token=${tokenData.access_token}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (viewRes.ok) {
+        const viewData = await viewRes.json();
+        setMediaContent({
+          content: viewData.content,
+          mime_type: viewData.mime_type,
+          is_final: viewData.is_final_view,
+        });
+        // Update status
+        const remaining = viewData.view_limit - viewData.views_used;
+        setMediaStatuses(prev => ({
+          ...prev,
+          [mediaId]: { viewable: remaining > 0, views_remaining: remaining },
+        }));
+      } else {
+        setMediaStatuses(prev => ({ ...prev, [mediaId]: { viewable: false, views_remaining: 0 } }));
+        setViewingMedia(null);
+      }
+    } catch (e) {
+      console.error('View media error:', e);
+      setViewingMedia(null);
+    }
+  };
+
+  const closeMediaViewer = () => {
+    setViewingMedia(null);
+    setMediaContent(null);
+  };
+
+  const [showMediaOptions, setShowMediaOptions] = useState(false);
+
   const formatTime = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -257,6 +350,8 @@ export default function ChatScreen() {
   const renderMessage = ({ item, index }: { item: Message; index: number }) => {
     const isMine = item.sender_id === user?.user_id;
     const showAvatar = !isMine && (index === 0 || messages[index - 1]?.sender_id !== item.sender_id);
+    const isEphemeral = item.msg_type?.startsWith('ephemeral_');
+    const mediaStatus = item.media_id ? mediaStatuses[item.media_id] : null;
 
     return (
       <View
@@ -270,17 +365,68 @@ export default function ChatScreen() {
         ) : null}
 
         <View style={[styles.messageBubble, isMine ? styles.bubbleMine : styles.bubbleTheirs]}>
-          {item.image && (
-            <Image
-              source={{ uri: item.image }}
-              style={styles.messageImage}
-              resizeMode="cover"
-            />
-          )}
-          {item.content && (
-            <Text style={[styles.messageText, isMine ? styles.messageTextMine : styles.messageTextTheirs]}>
-              {item.content}
-            </Text>
+          {/* Ephemeral Media Message */}
+          {isEphemeral && item.media_id ? (
+            <TouchableOpacity
+              testID={`view-media-${item.media_id}`}
+              style={styles.ephemeralContainer}
+              onPress={() => {
+                if (mediaStatus?.viewable === false) return;
+                handleViewMedia(item.media_id!);
+              }}
+              activeOpacity={0.7}
+              disabled={mediaStatus?.viewable === false}
+            >
+              <View style={[
+                styles.ephemeralInner,
+                mediaStatus?.viewable === false && styles.ephemeralExpired,
+              ]}>
+                <Ionicons
+                  name={
+                    mediaStatus?.viewable === false ? 'eye-off' :
+                    item.media_category === 'video' ? 'videocam' :
+                    item.media_category === 'audio' ? 'musical-note' : 'image'
+                  }
+                  size={28}
+                  color={mediaStatus?.viewable === false ? COLORS.text.tertiary : COLORS.accent.tertiary}
+                />
+                <View style={styles.ephemeralTextCol}>
+                  <Text style={[
+                    styles.ephemeralLabel,
+                    mediaStatus?.viewable === false && { color: COLORS.text.tertiary },
+                  ]}>
+                    {mediaStatus?.viewable === false
+                      ? 'Media expired'
+                      : `View-${item.media_view_limit === 1 ? 'once' : 'twice'} ${item.media_category || 'media'}`}
+                  </Text>
+                  <Text style={styles.ephemeralHint}>
+                    {mediaStatus?.viewable === false
+                      ? 'No longer available'
+                      : mediaStatus?.views_remaining !== undefined
+                        ? `${mediaStatus.views_remaining} view${mediaStatus.views_remaining !== 1 ? 's' : ''} remaining`
+                        : 'Tap to view'}
+                  </Text>
+                </View>
+                {item.media_view_limit === 1 && mediaStatus?.viewable !== false && (
+                  <Text style={styles.ephemeralBadge}>🔥</Text>
+                )}
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <>
+              {item.image && (
+                <Image
+                  source={{ uri: item.image }}
+                  style={styles.messageImage}
+                  resizeMode="cover"
+                />
+              )}
+              {item.content && (
+                <Text style={[styles.messageText, isMine ? styles.messageTextMine : styles.messageTextTheirs]}>
+                  {item.content}
+                </Text>
+              )}
+            </>
           )}
           <View style={styles.messageFooter}>
             <Text style={styles.messageTime}>{formatTime(item.created_at)}</Text>
@@ -373,10 +519,10 @@ export default function ChatScreen() {
         <View style={styles.inputBar}>
           <TouchableOpacity
             testID="pick-image-btn"
-            onPress={handlePickImage}
+            onPress={() => setShowMediaOptions(!showMediaOptions)}
             style={styles.attachBtn}
           >
-            <Ionicons name="image-outline" size={24} color={COLORS.accent.primary} />
+            <Ionicons name={showMediaOptions ? 'close-circle' : 'add-circle'} size={26} color={COLORS.accent.primary} />
           </TouchableOpacity>
 
           <View style={styles.inputContainer}>
@@ -405,7 +551,79 @@ export default function ChatScreen() {
             )}
           </TouchableOpacity>
         </View>
+
+        {/* Media Options Menu */}
+        {showMediaOptions && (
+          <View style={styles.mediaOptionsMenu}>
+            <TouchableOpacity
+              testID="send-normal-image-btn"
+              style={styles.mediaOption}
+              onPress={() => { setShowMediaOptions(false); handlePickImage(); }}
+            >
+              <View style={[styles.mediaOptionIcon, { backgroundColor: 'rgba(0,240,255,0.1)' }]}>
+                <Ionicons name="image" size={20} color={COLORS.accent.primary} />
+              </View>
+              <Text style={styles.mediaOptionText}>Photo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="send-view-once-btn"
+              style={styles.mediaOption}
+              onPress={() => { setShowMediaOptions(false); handleSendEphemeralMedia(1); }}
+            >
+              <View style={[styles.mediaOptionIcon, { backgroundColor: 'rgba(255,0,85,0.1)' }]}>
+                <Ionicons name="flame" size={20} color={COLORS.accent.tertiary} />
+              </View>
+              <Text style={styles.mediaOptionText}>View Once</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="send-view-twice-btn"
+              style={styles.mediaOption}
+              onPress={() => { setShowMediaOptions(false); handleSendEphemeralMedia(2); }}
+            >
+              <View style={[styles.mediaOptionIcon, { backgroundColor: 'rgba(112,0,255,0.1)' }]}>
+                <Ionicons name="eye" size={20} color={COLORS.accent.secondary} />
+              </View>
+              <Text style={styles.mediaOptionText}>View Twice</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </KeyboardAvoidingView>
+
+      {/* Media Viewer Modal */}
+      {viewingMedia && mediaContent && (
+        <View style={styles.mediaViewerOverlay}>
+          <View style={styles.mediaViewerHeader}>
+            <TouchableOpacity testID="close-media-viewer" onPress={closeMediaViewer} style={styles.mediaCloseBtn}>
+              <Ionicons name="close" size={28} color={COLORS.text.primary} />
+            </TouchableOpacity>
+            {mediaContent.is_final && (
+              <View style={styles.finalViewBadge}>
+                <Ionicons name="flame" size={14} color={COLORS.accent.tertiary} />
+                <Text style={styles.finalViewText}>Final view</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.mediaViewerContent}>
+            {mediaContent.mime_type.startsWith('image/') ? (
+              <Image
+                source={{ uri: mediaContent.content }}
+                style={styles.mediaViewerImage}
+                resizeMode="contain"
+              />
+            ) : mediaContent.mime_type.startsWith('audio/') ? (
+              <View style={styles.mediaAudioPlaceholder}>
+                <Ionicons name="musical-note" size={64} color={COLORS.accent.primary} />
+                <Text style={styles.mediaAudioText}>Audio Message</Text>
+              </View>
+            ) : (
+              <View style={styles.mediaAudioPlaceholder}>
+                <Ionicons name="videocam" size={64} color={COLORS.accent.primary} />
+                <Text style={styles.mediaAudioText}>Video Message</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -618,5 +836,126 @@ const styles = StyleSheet.create({
   avatarInitials: {
     color: COLORS.accent.primary,
     fontWeight: '700',
+  },
+  ephemeralContainer: {
+    marginBottom: 4,
+  },
+  ephemeralInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,0,85,0.08)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,0,85,0.2)',
+  },
+  ephemeralExpired: {
+    backgroundColor: 'rgba(100,116,139,0.08)',
+    borderColor: 'rgba(100,116,139,0.2)',
+  },
+  ephemeralTextCol: {
+    flex: 1,
+  },
+  ephemeralLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.accent.tertiary,
+  },
+  ephemeralHint: {
+    fontSize: 11,
+    color: COLORS.text.tertiary,
+    marginTop: 2,
+  },
+  ephemeralBadge: {
+    fontSize: 18,
+  },
+  mediaOptionsMenu: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    backgroundColor: COLORS.bg.secondary,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+  },
+  mediaOption: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  mediaOptionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mediaOptionText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.text.secondary,
+  },
+  mediaViewerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    zIndex: 100,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mediaViewerHeader: {
+    position: 'absolute',
+    top: 60,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    zIndex: 101,
+  },
+  mediaCloseBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  finalViewBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,0,85,0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,0,85,0.3)',
+  },
+  finalViewText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.accent.tertiary,
+  },
+  mediaViewerContent: {
+    width: '100%',
+    height: '70%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mediaViewerImage: {
+    width: '90%',
+    height: '90%',
+  },
+  mediaAudioPlaceholder: {
+    alignItems: 'center',
+    gap: 12,
+  },
+  mediaAudioText: {
+    fontSize: 16,
+    color: COLORS.text.secondary,
+    fontWeight: '600',
   },
 });

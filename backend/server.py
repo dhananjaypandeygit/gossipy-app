@@ -97,6 +97,12 @@ class ProximityMessageCreate(BaseModel):
     image: Optional[str] = None
     msg_type: str = "text"
 
+class MediaUpload(BaseModel):
+    content: str  # base64 encoded media
+    mime_type: str  # image/jpeg, video/mp4, audio/mpeg etc.
+    view_limit: int = 1  # 1 or 2 views allowed
+    conversation_id: Optional[str] = None  # optional: auto-send as message
+
 
 # ============ HELPERS ============
 
@@ -413,6 +419,233 @@ async def toggle_anonymous(request: Request):
     user = await db.users.find_one({"user_id": current_user["user_id"]}, {"_id": 0, "password_hash": 0})
     user['is_online'] = user.get('user_id', '') in online_users
     return {"user": user}
+
+
+# ============ EPHEMERAL MEDIA ROUTES ============
+
+def create_media_token(media_id: str, user_id: str) -> str:
+    """Create a short-lived signed token for media access (60 seconds)."""
+    payload = {
+        'media_id': media_id,
+        'user_id': user_id,
+        'exp': datetime.now(timezone.utc) + timedelta(seconds=60),
+        'iat': datetime.now(timezone.utc),
+        'type': 'media_access',
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def verify_media_token(token: str) -> dict:
+    """Verify a media access token."""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get('type') != 'media_access':
+            return None
+        return payload
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return None
+
+@fastapi_app.post("/api/media/upload")
+async def upload_media(request: Request, body: MediaUpload):
+    """Upload ephemeral media. Returns media_id for use in messages."""
+    current_user = await get_current_user(request)
+    
+    # Validate view limit
+    view_limit = body.view_limit if body.view_limit in [1, 2] else 1
+    
+    # Validate mime type
+    allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp',
+                     'video/mp4', 'video/webm', 'video/quicktime',
+                     'audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/webm']
+    if body.mime_type not in allowed_types:
+        raise HTTPException(status_code=400, detail=f"Unsupported mime type: {body.mime_type}")
+    
+    # Determine media category
+    if body.mime_type.startswith('image/'):
+        media_category = 'image'
+    elif body.mime_type.startswith('video/'):
+        media_category = 'video'
+    else:
+        media_category = 'audio'
+    
+    media_id = generate_id("media_")
+    media_doc = {
+        "media_id": media_id,
+        "uploader_id": current_user["user_id"],
+        "content": body.content,
+        "mime_type": body.mime_type,
+        "media_category": media_category,
+        "view_limit": view_limit,
+        "views": {},  # {user_id: view_count}
+        "expired": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.media.insert_one(media_doc)
+    
+    # Optionally send as message
+    msg_data = None
+    if body.conversation_id:
+        conv = await db.conversations.find_one({
+            "conversation_id": body.conversation_id,
+            "participants": current_user["user_id"]
+        }, {"_id": 0})
+        if conv:
+            full_user = await db.users.find_one({"user_id": current_user["user_id"]}, {"_id": 0, "password_hash": 0})
+            sender_info = get_sender_display(full_user) if full_user else get_sender_display(current_user)
+            msg_id = generate_id("msg_")
+            message = {
+                "message_id": msg_id,
+                "conversation_id": body.conversation_id,
+                "sender_id": current_user["user_id"],
+                "sender_username": sender_info["sender_username"],
+                "sender_avatar": sender_info["sender_avatar"],
+                "sender_is_anonymous": sender_info["sender_is_anonymous"],
+                "content": f"{'🔥' if view_limit == 1 else '👁️'} View-{'once' if view_limit == 1 else 'twice'} {media_category}",
+                "image": None,
+                "media_id": media_id,
+                "media_category": media_category,
+                "media_view_limit": view_limit,
+                "msg_type": f"ephemeral_{media_category}",
+                "read": False,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.messages.insert_one(message)
+            msg_copy = {k: v for k, v in message.items() if k != '_id'}
+            
+            # Update conversation
+            await db.conversations.update_one(
+                {"conversation_id": body.conversation_id},
+                {"$set": {
+                    "last_message": f"{'🔥' if view_limit == 1 else '👁️'} View-{'once' if view_limit == 1 else 'twice'} {media_category}",
+                    "last_message_at": message["created_at"],
+                    "updated_at": message["created_at"]
+                }}
+            )
+            
+            # Broadcast
+            await sio.emit('new_message', msg_copy, room=body.conversation_id)
+            msg_data = msg_copy
+    
+    return {
+        "media_id": media_id,
+        "media_category": media_category,
+        "view_limit": view_limit,
+        "message": msg_data,
+    }
+
+@fastapi_app.get("/api/media/{media_id}/token")
+async def get_media_access_token(request: Request, media_id: str):
+    """Request a signed access token for viewing media. Checks view eligibility."""
+    current_user = await get_current_user(request)
+    
+    media = await db.media.find_one({"media_id": media_id}, {"_id": 0, "content": 0})
+    if not media:
+        raise HTTPException(status_code=404, detail="Media not found")
+    
+    if media.get("expired"):
+        raise HTTPException(status_code=410, detail="Media has expired")
+    
+    # Check view count for this user
+    user_views = media.get("views", {}).get(current_user["user_id"], 0)
+    view_limit = media.get("view_limit", 1)
+    
+    # Uploader can always view their own media
+    is_uploader = media.get("uploader_id") == current_user["user_id"]
+    
+    if not is_uploader and user_views >= view_limit:
+        raise HTTPException(status_code=410, detail="You have already viewed this media")
+    
+    # Generate short-lived signed token
+    access_token = create_media_token(media_id, current_user["user_id"])
+    
+    return {
+        "access_token": access_token,
+        "media_id": media_id,
+        "media_category": media.get("media_category"),
+        "mime_type": media.get("mime_type"),
+        "view_limit": view_limit,
+        "views_remaining": max(0, view_limit - user_views) if not is_uploader else -1,
+        "expires_in": 60,
+    }
+
+@fastapi_app.get("/api/media/{media_id}/view")
+async def view_media(request: Request, media_id: str, token: str):
+    """View media content with a valid signed token. Increments view count."""
+    # Verify the signed token
+    payload = verify_media_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired access token")
+    
+    if payload.get("media_id") != media_id:
+        raise HTTPException(status_code=401, detail="Token does not match media")
+    
+    viewer_id = payload.get("user_id")
+    
+    media = await db.media.find_one({"media_id": media_id}, {"_id": 0})
+    if not media:
+        raise HTTPException(status_code=404, detail="Media not found")
+    
+    if media.get("expired"):
+        raise HTTPException(status_code=410, detail="Media has expired")
+    
+    # Check view count again (double-check at view time)
+    user_views = media.get("views", {}).get(viewer_id, 0)
+    view_limit = media.get("view_limit", 1)
+    is_uploader = media.get("uploader_id") == viewer_id
+    
+    if not is_uploader and user_views >= view_limit:
+        raise HTTPException(status_code=410, detail="View limit reached")
+    
+    # Increment view count for non-uploaders
+    if not is_uploader:
+        new_count = user_views + 1
+        await db.media.update_one(
+            {"media_id": media_id},
+            {"$set": {f"views.{viewer_id}": new_count}}
+        )
+        
+        # Check if all conversation participants have exhausted views — mark expired
+        # For now, just check this viewer
+        if new_count >= view_limit:
+            # Check if we should mark the entire media as expired
+            # Mark expired only if intended recipient has exhausted views
+            await db.media.update_one(
+                {"media_id": media_id},
+                {"$set": {"expired": True}}
+            )
+    
+    return {
+        "media_id": media_id,
+        "content": media.get("content"),
+        "mime_type": media.get("mime_type"),
+        "media_category": media.get("media_category"),
+        "views_used": (user_views + 1) if not is_uploader else 0,
+        "view_limit": view_limit,
+        "is_final_view": (user_views + 1 >= view_limit) if not is_uploader else False,
+    }
+
+@fastapi_app.get("/api/media/{media_id}/status")
+async def get_media_status(request: Request, media_id: str):
+    """Check if media is still viewable for the current user."""
+    current_user = await get_current_user(request)
+    
+    media = await db.media.find_one({"media_id": media_id}, {"_id": 0, "content": 0})
+    if not media:
+        raise HTTPException(status_code=404, detail="Media not found")
+    
+    user_views = media.get("views", {}).get(current_user["user_id"], 0)
+    view_limit = media.get("view_limit", 1)
+    is_uploader = media.get("uploader_id") == current_user["user_id"]
+    expired = media.get("expired", False)
+    
+    return {
+        "media_id": media_id,
+        "expired": expired,
+        "view_limit": view_limit,
+        "views_used": user_views,
+        "views_remaining": max(0, view_limit - user_views) if not is_uploader else -1,
+        "is_viewable": is_uploader or (not expired and user_views < view_limit),
+        "media_category": media.get("media_category"),
+    }
 
 
 # ============ CONVERSATION ROUTES ============
@@ -1251,7 +1484,10 @@ async def startup():
     await db.proximity_messages.create_index("message_id", unique=True)
     # TTL index: auto-delete messages after 24 hours
     await db.proximity_messages.create_index("expires_at", expireAfterSeconds=0)
-    logger.info("Database indexes created (including 2dsphere + proximity TTL)")
+    # Media indexes
+    await db.media.create_index("media_id", unique=True)
+    await db.media.create_index("uploader_id")
+    logger.info("Database indexes created (including 2dsphere + proximity TTL + media)")
 
 @fastapi_app.on_event("shutdown")
 async def shutdown():
